@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Why a 2019 16-inch MacBook Pro under Boot Camp cuts CPU and GPU power in games, the evidence from SMC logs, and the fix.">
+<style>body{margin:0;font:14px/1.4 system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>The 70-Watt Ceiling</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@400;600;800&family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&display=swap">
+<style>
+/* Layout: a bench log. One left-aligned reading column; charts break out wider; key names always in mono. */
+:root {
+  --bg: #f3f5f4; --panel: #ffffff; --ink: #121615; --ink-2: #4a5350; --ink-3: #6f7a76;
+  --rule: #d5dbd8; --grid: #e4e8e6;
+  --draw: #2a78d6; --budget: #eb6834; --pz0t: #4a5350;
+  --warn: #fab219; --crit: #d03b3b; --good: #0ca30c;
+  --mark: #121615;
+  --mono: "Martian Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --sans: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #111413; --panel: #181c1b; --ink: #eef1ef; --ink-2: #b9c2be; --ink-3: #8d9893;
+  --rule: #2c3331; --grid: #232927;
+  --draw: #3987e5; --budget: #d95926; --pz0t: #b9c2be; --mark: #eef1ef; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #111413; --panel: #181c1b; --ink: #eef1ef; --ink-2: #b9c2be; --ink-3: #8d9893;
+  --rule: #2c3331; --grid: #232927;
+  --draw: #3987e5; --budget: #d95926; --pz0t: #b9c2be; --mark: #eef1ef; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font: 16px/1.6 var(--sans); margin: 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+main { max-width: 980px; margin: 0 auto; padding-block: 40px 80px; display: grid; gap: 56px }
+.col { max-width: 66ch; }
+h1, h2, h3 { text-wrap: balance; margin: 0; line-height: 1.2 }
+h2 { font: 600 1.45rem/1.25 var(--sans); letter-spacing: -0.01em }
+h3 { font: 600 1.05rem/1.3 var(--sans) }
+p { margin: 0 }
+section { display: grid; gap: 16px; min-width: 0 }
+code, .k { font-family: var(--mono); font-size: 0.82em; letter-spacing: -0.01em }
+.k { font-weight: 600 }
+a { color: var(--draw); text-underline-offset: 2px }
+.eyebrow { font: 600 0.72rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3) }
+.lede { font-size: 1.1rem; color: var(--ink-2) }
+
+/* The one bold idea: the hero is a readout line from the SMC log */
+.hero { display: grid; gap: 22px; padding-top: 8px }
+.readout { font-family: var(--mono); font-weight: 800; font-size: clamp(1.6rem, 6.2vw, 4.1rem); line-height: 1.05; letter-spacing: -0.04em; display: flex; flex-wrap: wrap; gap: 0.1em 0.45em; align-items: baseline }
+.readout .lt { color: var(--ink-3); font-weight: 400 }
+.readout .f { color: var(--draw) } .readout .e { color: var(--budget) }
+.readout small { font-size: 0.42em; font-weight: 400; color: var(--ink-3); letter-spacing: 0 }
+.stamp { font: 400 0.78rem/1.5 var(--mono); color: var(--ink-3) }
+.hero h1 { font: 700 clamp(1.5rem, 3.2vw, 2.1rem)/1.2 var(--sans); max-width: 30ch; letter-spacing: -0.015em }
+
+.answer { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; max-width: 70ch }
+.answer li { padding-left: 18px; position: relative }
+.answer li::before { content: ""; position: absolute; left: 0; top: 0.7em; width: 8px; height: 2px; background: var(--ink-3) }
+
+/* mechanism ladder: a real sequence, so numbered */
+.ladder { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border-left: 2px solid var(--rule); max-width: 72ch }
+.ladder li { display: grid; grid-template-columns: 4.2rem 1fr; gap: 14px; padding: 12px 0 12px 16px; position: relative; min-width: 0 }
+.ladder li + li { border-top: 1px solid var(--grid) }
+.ladder .n { font: 600 0.78rem/1.6 var(--mono); color: var(--ink-3) }
+.ladder li > div { min-width: 0 }
+.ladder .sev { position: absolute; left: -5px; top: 18px; width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3) }
+.ladder .s1 { background: var(--draw) } .ladder .s2 { background: var(--budget) } .ladder .s3 { background: var(--warn) } .ladder .s4 { background: var(--crit) }
+
+/* charts */
+.figure { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px 18px 14px; display: grid; gap: 10px; min-width: 0 }
+.figure figcaption { color: var(--ink-2); font-size: 0.92rem; max-width: 72ch }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font: 400 0.76rem/1.4 var(--mono); color: var(--ink-2) }
+.legend span { display: inline-flex; align-items: center; gap: 6px }
+.sw { width: 14px; height: 2px; display: inline-block; border-radius: 1px }
+.sw.dot { width: 8px; height: 8px; border-radius: 50% }
+.multiples { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 20px }
+@media (max-width: 720px) { .multiples { grid-template-columns: minmax(0, 1fr) } }
+.panel { display: grid; gap: 4px; min-width: 0 }
+.panel .t { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline }
+.panel .t b { font: 600 0.82rem/1.3 var(--mono) }
+.panel .t i { font-style: normal; font-size: 0.8rem; color: var(--ink-3) }
+.verdict { font: 600 0.72rem/1 var(--mono); letter-spacing: 0.04em; padding: 4px 7px; border-radius: 3px; border: 1px solid currentColor; white-space: nowrap }
+.verdict.ok { color: var(--good) } .verdict.bad { color: var(--crit) }
+.chart { position: relative; min-width: 0 }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible }
+.chart text { font-family: var(--mono); font-size: 10px; fill: var(--ink-3) }
+.chart .axis-title { fill: var(--ink-2) }
+.chart .grid line { stroke: var(--grid); stroke-width: 1 }
+.chart .base { stroke: var(--rule); stroke-width: 1 }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 6px 8px; font: 400 0.72rem/1.45 var(--mono); color: var(--ink); white-space: nowrap; box-shadow: 0 2px 10px rgba(0,0,0,.08); z-index: 2 }
+.tip b { font-weight: 600 }
+.split { display: grid; gap: 14px }
+
+/* tables */
+.tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--panel) }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; font-variant-numeric: tabular-nums; min-width: 760px }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--grid); vertical-align: top }
+th { font: 600 0.7rem/1.3 var(--mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); background: var(--panel) }
+tr:last-child td { border-bottom: 0 }
+td.t { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap }
+tr.pick td { background: color-mix(in srgb, var(--draw) 8%, transparent) }
+.res-ok { color: var(--good); font-weight: 600 } .res-bad { color: var(--crit); font-weight: 600 } .res-mid { color: var(--ink-2); font-weight: 600 }
+
+/* dead ends */
+.dead { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 28px; max-width: 900px }
+@media (max-width: 720px) { .dead { grid-template-columns: minmax(0, 1fr) } }
+.dead li { padding: 10px 0; border-top: 1px solid var(--rule); min-width: 0 }
+.dead b { font-weight: 600 }
+.dead .why { color: var(--ink-2) }
+
+.preset { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--rule); border-radius: 6px; background: var(--panel); overflow: hidden }
+.preset div { padding: 14px 16px; display: grid; gap: 4px; min-width: 0 }
+.preset div + div { border-left: 1px solid var(--rule) }
+.preset .v { font: 600 1.25rem/1.2 var(--mono); letter-spacing: -0.02em }
+.preset .l { font-size: 0.82rem; color: var(--ink-2) }
+@media (max-width: 720px) { .preset { grid-template-columns: repeat(2, minmax(0, 1fr)) } .preset div:nth-child(3) { border-left: 0 } .preset div:nth-child(n+3) { border-top: 1px solid var(--rule) } }
+
+.caveats { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; max-width: 70ch; color: var(--ink-2) }
+.note { font-size: 0.9rem; color: var(--ink-2); max-width: 70ch }
+footer { border-top: 1px solid var(--rule); padding-top: 18px; color: var(--ink-3); font-size: 0.85rem; display: grid; gap: 6px }
+:focus-visible { outline: 2px solid var(--draw); outline-offset: 2px }
+</style>
+</head>
+<body>
+
+
+<main>
+  <header class="hero">
+    <div class="eyebrow">MacBookPro16,1 · i9-9880H · Radeon Pro 5500M 8 GB · Boot Camp · Battlefield 6</div>
+    <div class="readout" aria-label="Draw PZ0F 65.6 watts is below budget PZ0E 70.2 watts">
+      <span class="f">PZ0F&nbsp;65.6<small>&nbsp;W</small></span><span class="lt">&lt;</span><span class="e">PZ0E&nbsp;70.2<small>&nbsp;W</small></span>
+    </div>
+    <div class="stamp">smclog 2026-11-08 11:15 · peak draw vs lowest budget · no cut for the whole run</div>
+    <h1>Why the 2019 16-inch MacBook Pro slows down a few minutes into a game, and how to keep it from happening</h1>
+    <ul class="answer">
+      <li>The SMC, the system controller inside the T2 chip, cuts the power. The charger, the AMD driver, ACPI and the chip temperatures are not the cause.</li>
+      <li>It gives the CPU and GPU one shared power budget: about 82 W when cold, falling as the case warms, to roughly 65–72 W in our capped runs and as low as 54–60 W under full stock load.</li>
+      <li>The budget is fixed in Apple's signed SMC firmware. No setting, SMC key or driver option raises it.</li>
+      <li>The fix is to stay under it: GPU capped at 32 W, CPU capped at 1700 MHz, the game in Borderless. That ran BF6 with no cut at all and a median of 53 FPS.</li>
+    </ul>
+  </header>
+
+  <section>
+    <div class="eyebrow">How the limit works</div>
+    <h2>One budget, four stages of enforcement</h2>
+    <p class="col">The SMC's zone-0 controller compares two values every second. When the draw stays above the budget, it steps in, harder each stage. Windows, ACPI and the AMD driver only pass its decisions on.</p>
+    <ol class="ladder">
+      <li><span class="sev s1"></span><span class="n">1</span><div><span class="k">PZ0F</span> is the smoothed CPU + GPU draw in watts. <span class="k">PZ0E</span> is the budget. It starts at ~82 W and falls as the case sensor <span class="k">Ts0S</span> warms past ~43.5 °C.</div></li>
+      <li><span class="sev s2"></span><span class="n">2</span><div>While <span class="k">PZ0F</span> is above <span class="k">PZ0E</span>, <span class="k">PZ0T</span> climbs. It adds up the overshoot, roughly 0.5–1.3 per second.</div></li>
+      <li><span class="sev s2"></span><span class="n">3</span><div><b>GPU steps.</b> <span class="k">MSLG</span> rises and reaches the GPU as <span class="k">EGPS</span>: the power limit drops 50 → 45 → 40 → 35 → 30 W, each step 10 % of the power table's limit.</div></li>
+      <li><span class="sev s3"></span><span class="n">4</span><div><b>Hidden CPU cut.</b> <span class="k">MSLC</span> (0–24) slows the real CPU clock from 2300 to about 800 MHz. HWiNFO and ThrottleStop still show 23x, so it looks like nothing happened.</div></li>
+      <li><span class="sev s4"></span><span class="n">5</span><div><b>PROCHOT.</b> When <span class="k">MSLC</span> is at 24 and <span class="k">PZ0T</span> reaches ~98, the CPU drops to 8x and the GPU to 300 MHz: ~10 FPS, in pulses of 4–8 s.</div></li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="eyebrow">Evidence</div>
+    <h2>Draw against budget, four runs</h2>
+    <p class="col">Each panel is one BF6 session, logged once a second from the SMC. The first two go over the budget and get cut. The last two stay under it and never do. Same game, same map, same machine; only the caps differ.</p>
+    <figure class="figure">
+      <div class="legend" aria-hidden="true">
+        <span><i class="sw" style="background:var(--draw)"></i>PZ0F draw (W)</span>
+        <span><i class="sw" style="background:var(--budget)"></i>PZ0E budget (W)</span>
+        <span><i class="sw" style="background:var(--pz0t)"></i>PZ0T overshoot (0–100)</span>
+        <span><i class="sw dot" style="background:var(--warn)"></i>MSLC starts</span>
+        <span><i class="sw dot" style="background:var(--crit)"></i>first PROCHOT</span>
+      </div>
+      <div class="multiples" id="multiples"></div>
+      <figcaption>Seconds from the start of logging, sampled every 5 s. The 01:41 run predates <span class="k">PZ0F</span> logging, so only the budget and <span class="k">PZ0T</span> are shown. PROCHOT times come from HWiNFO, aligned to the SMC log by matching the GPU temperature in both. Runs 01:41–09:51 used a driver-flag bypass; 11:15 used the stock driver.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="eyebrow">What fooled us</div>
+    <h2>Three things that looked like the problem and weren't</h2>
+    <div class="split">
+      <figure class="figure">
+        <h3>HWiNFO's effective clock collapses while the CPU is fine</h3>
+        <div class="legend" aria-hidden="true">
+          <span><i class="sw" style="background:var(--ink-3)"></i>HWiNFO average effective clock (MHz)</span>
+          <span><i class="sw" style="background:var(--draw)"></i>Windows typeperf real clock (MHz)</span>
+        </div>
+        <div class="chart" id="clock"></div>
+        <figcaption>08:51 run. From about 8:54 HWiNFO reports the cores at 50–100 MHz and 2–5 % active, while Windows' own counters show them 70–80 % busy at 2300 MHz, and the game holds 60 FPS. The real CPU cut (<span class="k">MSLC</span>, from 8:56) only shows in typeperf. Real clock = <code>% Processor Performance × 2300 MHz</code>.</figcaption>
+      </figure>
+      <figure class="figure">
+        <h3>Fullscreen cost 60 % of the frame rate</h3>
+        <div class="legend" aria-hidden="true">
+          <span><i class="sw" style="background:var(--draw)"></i>FPS</span>
+          <span><i class="sw" style="background:var(--budget)"></i>GPU busy per frame (ms)</span>
+        </div>
+        <div class="chart" id="fps"></div>
+        <div class="chart" id="gpums"></div>
+        <figcaption>10:18 run, same power settings throughout. At 10:28:58 BF6's display mode was switched from Fullscreen to Borderless mid-match: GPU time per frame fell from ~45 ms to ~15 ms and FPS rose from ~22 to 56–60. Several slow runs earlier that morning were this setting, not the power limit.</figcaption>
+      </figure>
+      <p class="note"><b>And a network mouse.</b> Synergy, the tool sharing a keyboard and mouse over the network, dropped input now and then. It looked exactly like the CPU stalling. typeperf showed the CPU running normally each time.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">The fix</div>
+    <h2>Stay under the warm budget</h2>
+    <p class="col">Nothing raises the budget, so the fix lowers the draw. Each cap was found by moving it until the SMC stopped cutting.</p>
+    <div class="preset">
+      <div><span class="v">32 W</span><span class="l">GPU power limit (soft PowerPlay table)</span></div>
+      <div><span class="v">1700 MHz</span><span class="l">CPU cap (Windows power plan maximum frequency)</span></div>
+      <div><span class="v">flag 1</span><span class="l">AMD driver left stock, no bypass</span></div>
+      <div><span class="v">Borderless</span><span class="l">BF6 display mode, Low preset</span></div>
+    </div>
+    <p class="col">Result, 11:15 run: CPU 17x at ~19 W, draw peaked at 65.6 W, budget bottomed at 70.2 W and then rose to 72 W. <span class="k">PZ0T</span>, <span class="k">MSLC</span> and <span class="k">MSLG</span> stayed at 0. FPS median 53, 10th percentile 47, 1 % lows ~35.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Run</th><th>GPU</th><th>CPU</th><th>Driver</th><th>Draw vs budget</th><th>SMC</th><th>FPS</th></tr></thead>
+        <tbody>
+          <tr><td class="t">08:37</td><td>30 W</td><td>PL1 20 W</td><td>bypass</td><td>~69–70 W, budget 82 → 75 W</td><td class="res-ok">no cuts</td><td>40–57</td></tr>
+          <tr><td class="t">08:51</td><td>35 W</td><td>PL1 20 W</td><td>bypass</td><td>~77 W over ~67 W</td><td class="res-bad">MSLC 24, PROCHOT</td><td>60, drops to 24</td></tr>
+          <tr><td class="t">09:40</td><td>32 W</td><td>PL1 20 W, not clamped</td><td>bypass</td><td>~72 W over ~65 W</td><td class="res-bad">MSLC 22–23, PROCHOT</td><td>52–60, dips to 25</td></tr>
+          <tr><td class="t">09:51</td><td>32 W</td><td>PL1 20 W, clamped</td><td>bypass</td><td>~65–66 W under ~71 W</td><td class="res-ok">no cuts</td><td>50–59</td></tr>
+          <tr><td class="t">10:18</td><td>32 W</td><td>1800 MHz</td><td>stock</td><td>~65–67 W met ~65.3 W</td><td class="res-mid">PZ0T 17, no steps yet</td><td>50–60 (Borderless)</td></tr>
+          <tr><td class="t">10:58</td><td>32 W</td><td>1600 MHz (ran 1500)</td><td>stock</td><td>~60–61 W under 68.6–71 W</td><td class="res-ok">no cuts</td><td>dips in busy scenes</td></tr>
+          <tr class="pick"><td class="t">11:15</td><td>32 W</td><td>1700 MHz</td><td>stock</td><td>65.6 W peak under 70.2 W low</td><td class="res-ok">no cuts</td><td>median 53</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>Not proven yet</h3>
+    <ul class="caveats">
+      <li>The 11:15 run was ~7 minutes of play. A 15-minute confirmation is still owed.</li>
+      <li>Every run used a MorePowerTool table that also lowers the GPU's maximum voltage to 950 mV. The version being built changes only the power limit, at stock voltage, so it may draw a little more.</li>
+      <li>One machine, one game, one room. 30 W is the safer GPU setting for a hot room, judged from its larger margin; no hot-room run was made.</li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="eyebrow">The hunt</div>
+    <h2>Everything else we tried</h2>
+    <p class="col">The SMC firmware was reverse-engineered as part of this research. That is how we know the budget is fixed in the firmware and that no key or setting raises it. That work is kept in a separate private repository and is not published.</p>
+    <ul class="dead">
+      <li><b>ACPI.</b> <span class="why">It relays the SMC's bytes to Windows; no method writes them.</span></li>
+      <li><b>AMD PowerPlay and VBIOS.</b> <span class="why">The cut is a forced power state applied on top of the table.</span></li>
+      <li><b>Writing SMC keys.</b> <span class="why">A new <span class="k">PZ0E</span> is overwritten within a second; no key holds the ceilings.</span></li>
+      <li><b>EFI settings.</b> <span class="why">Its CPU power limit is the same register ThrottleStop writes.</span></li>
+      <li><b>The charger.</b> <span class="why">Already Apple's 96 W, the most this model takes.</span></li>
+      <li><b>Chip temperature.</b> <span class="why">PROCHOT fired with the GPU hot spot under 95 °C.</span></li>
+      <li><b>Case temperature as the trigger.</b> <span class="why">Same <span class="k">Ts0S</span>, no cut while the draw is under budget. It only sets the budget.</span></li>
+      <li><b>Bypassing the GPU steps.</b> <span class="why">With the driver flag at 0 the GPU ignores <span class="k">MSLG</span>, so the SMC goes straight to <span class="k">MSLC</span> and PROCHOT.</span></li>
+      <li><b>Turbo off.</b> <span class="why">Unplayable.</span></li>
+      <li><b>Patching the SMC firmware.</b> <span class="why">Signed and verified by the T2. Studied, not attempted.</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="eyebrow">Status</div>
+    <h2>Next</h2>
+    <p class="col">The fix is being built into gamebooster-rs for owners who have never used MorePowerTool or ThrottleStop: one program that installs the 32 W GPU table, caps the CPU only while BF6 runs, and keeps BF6 in Borderless. It changes nothing on any other machine. Linux was not measured; its AMD driver ignores the SMC's GPU steps, so it would likely behave like the bypass runs.</p>
+  </section>
+
+  <footer>
+    <span>Measured on one 2019 16-inch MacBook Pro, 7–8 November 2026, with smclog (a read-only SMC logger), HWiNFO and Windows typeperf.</span>
+    <span>Raw logs are not published. Key names such as <span class="k">PZ0F</span> are the SMC's own.</span>
+  </footer>
+</main>
+
+<script>
+const D = {"r0141":{"pts":[[0,null,82.0,0.0,0.0],[5,null,82.0,0.0,0.0],[10,null,82.0,0.0,0.0],[15,null,82.0,0.0,0.0],[20,null,82.0,0.0,0.0],[25,null,82.0,0.0,0.0],[30,null,82.0,0.0,0.0],[35,null,82.0,0.0,0.0],[40,null,82.0,0.0,0.0],[45,null,82.0,0.0,0.0],[50,null,82.0,0.0,0.0],[55,null,82.0,0.0,0.0],[60,null,82.0,0.0,0.0],[65,null,82.0,0.0,0.0],[70,null,82.0,0.0,0.0],[75,null,82.0,0.0,0.0],[80,null,82.0,0.0,0.0],[85,null,82.0,0.0,0.0],[90,null,82.0,0.0,0.0],[95,null,81.8,0.0,0.0],[100,null,80.4,0.0,0.0],[105,null,79.0,0.0,0.0],[110,null,77.7,0.0,0.0],[115,null,76.3,0.0,0.0],[120,null,75.1,3.9,0.0],[125,null,73.9,8.9,0.0],[130,null,72.7,14.5,0.0],[135,null,71.6,20.5,0.0],[140,null,70.6,27.0,0.0],[145,null,69.6,34.0,0.0],[150,null,68.7,41.5,1.0],[155,null,67.8,49.3,4.0],[160,null,66.9,57.5,7.0],[165,null,66.1,66.0,10.0],[170,null,65.4,75.0,13.0],[175,null,64.6,84.6,17.0],[180,null,63.9,94.4,22.0],[185,null,63.2,98.4,24.0],[190,null,62.5,96.6,24.0],[195,null,61.9,94.2,24.0],[200,null,61.4,91.1,22.0],[205,null,60.9,98.5,24.0],[210,null,60.5,95.5,24.0],[215,null,60.2,90.2,22.0],[220,null,59.9,80.9,17.0],[225,null,59.8,66.5,11.0],[230,null,59.8,50.9,6.0],[235,null,60.1,33.6,0.0],[240,null,60.5,17.0,0.0]],"mslc":150,"prochot":184},"r0851":{"pts":[[0,15.9,82.0,0.0,0.0],[5,16.7,82.0,0.0,0.0],[10,16.2,82.0,0.0,0.0],[15,16.7,82.0,0.0,0.0],[20,18.8,82.0,0.0,0.0],[25,19.9,82.0,0.0,0.0],[30,22.3,82.0,0.0,0.0],[35,25.3,82.0,0.0,0.0],[40,28.3,82.0,0.0,0.0],[45,34.0,82.0,0.0,0.0],[50,38.1,82.0,0.0,0.0],[55,42.6,82.0,0.0,0.0],[60,47.6,82.0,0.0,0.0],[65,51.5,82.0,0.0,0.0],[70,54.5,82.0,0.0,0.0],[75,57.1,82.0,0.0,0.0],[80,58.9,82.0,0.0,0.0],[85,57.5,82.0,0.0,0.0],[90,56.5,82.0,0.0,0.0],[95,58.3,82.0,0.0,0.0],[100,60.4,82.0,0.0,0.0],[105,62.8,82.0,0.0,0.0],[110,65.0,82.0,0.0,0.0],[115,67.0,82.0,0.0,0.0],[120,68.4,82.0,0.0,0.0],[125,69.6,82.0,0.0,0.0],[130,70.4,82.0,0.0,0.0],[135,71.3,82.0,0.0,0.0],[140,71.8,82.0,0.0,0.0],[145,72.4,82.0,0.0,0.0],[150,72.9,82.0,0.0,0.0],[155,73.7,81.6,0.0,0.0],[160,74.3,80.7,0.0,0.0],[165,75.2,79.9,0.0,0.0],[170,75.8,79.1,0.0,0.0],[175,76.3,78.4,0.0,0.0],[180,76.9,77.6,0.0,0.0],[185,77.3,77.0,1.0,0.0],[190,77.7,76.4,3.5,0.0],[195,77.8,75.7,5.9,0.0],[200,77.8,75.1,8.4,0.0],[205,77.6,74.5,10.7,0.0],[210,77.3,74.0,12.7,0.0],[215,76.8,73.5,14.4,0.0],[220,76.5,73.1,16.3,0.0],[225,76.4,72.7,18.6,0.0],[230,76.3,72.3,21.1,0.0],[235,76.1,72.0,23.4,0.0],[240,76.1,71.8,26.1,0.0],[245,76.0,71.5,28.5,0.0],[250,75.9,71.2,31.1,0.0],[255,75.6,71.0,33.3,0.0],[260,75.7,70.8,36.2,0.0],[265,75.8,70.6,39.3,0.0],[270,76.0,70.5,42.8,1.0],[275,76.3,70.3,46.7,3.0],[280,76.5,70.1,50.5,4.0],[285,77.0,70.0,55.1,6.0],[290,77.3,69.8,59.8,7.0],[295,77.6,69.7,64.5,9.0],[300,77.5,69.5,68.8,11.0],[305,77.3,69.3,72.7,12.0],[310,77.2,69.2,76.9,14.0],[315,77.1,69.0,81.0,15.0],[320,77.0,68.8,85.2,17.0],[325,76.8,68.7,89.2,19.0],[330,76.7,68.5,93.4,21.0],[335,76.4,68.3,97.3,23.0],[340,73.5,68.2,95.6,24.0],[345,70.7,68.0,91.9,22.0],[350,71.1,67.9,94.3,22.0],[355,71.6,67.8,97.2,23.0],[360,70.2,67.8,96.3,24.0],[365,67.5,67.7,91.4,22.0],[370,68.3,67.7,93.1,22.0],[375,69.3,67.7,95.6,22.0],[380,70.3,67.7,98.5,24.0],[385,67.0,67.8,92.5,23.0],[390,67.2,67.8,92.5,22.0],[395,68.4,67.8,94.8,22.0],[400,69.4,67.8,97.4,23.0],[405,68.1,67.8,95.6,24.0],[410,66.7,67.8,92.1,22.0],[415,68.2,67.8,95.0,22.0],[420,69.6,67.8,98.5,24.0],[425,66.4,67.7,92.5,23.0],[430,67.1,67.6,93.5,22.0],[435,68.6,67.5,96.7,23.0],[440,67.8,67.5,96.0,24.0],[445,65.9,67.3,91.8,22.0],[450,67.5,67.3,94.9,22.0],[455,68.6,67.2,97.7,23.0],[460,67.0,67.2,95.3,24.0],[465,65.8,67.1,92.3,22.0],[470,67.4,67.0,95.5,22.0],[475,65.6,67.0,91.9,22.0]],"mslc":267,"prochot":337},"r0951":{"pts":[[0,29.3,82.0,0.0,0.0],[5,28.3,82.0,0.0,0.0],[10,27.6,82.0,0.0,0.0],[15,27.8,82.0,0.0,0.0],[20,27.5,82.0,0.0,0.0],[25,28.7,82.0,0.0,0.0],[30,30.5,82.0,0.0,0.0],[35,32.3,82.0,0.0,0.0],[40,35.3,82.0,0.0,0.0],[45,38.2,82.0,0.0,0.0],[50,42.0,82.0,0.0,0.0],[55,45.4,82.0,0.0,0.0],[60,48.4,82.0,0.0,0.0],[65,50.9,82.0,0.0,0.0],[70,53.1,82.0,0.0,0.0],[75,52.7,82.0,0.0,0.0],[80,52.1,82.0,0.0,0.0],[85,53.4,82.0,0.0,0.0],[90,54.9,82.0,0.0,0.0],[95,56.5,82.0,0.0,0.0],[100,57.9,82.0,0.0,0.0],[105,59.1,82.0,0.0,0.0],[110,60.1,82.0,0.0,0.0],[115,61.0,82.0,0.0,0.0],[120,61.7,82.0,0.0,0.0],[125,62.3,82.0,0.0,0.0],[130,62.8,82.0,0.0,0.0],[135,63.3,82.0,0.0,0.0],[140,63.7,82.0,0.0,0.0],[145,64.0,81.4,0.0,0.0],[150,64.3,80.5,0.0,0.0],[155,64.5,79.7,0.0,0.0],[160,64.7,78.8,0.0,0.0],[165,64.9,78.1,0.0,0.0],[170,65.1,77.3,0.0,0.0],[175,65.2,76.7,0.0,0.0],[180,65.4,76.0,0.0,0.0],[185,65.5,75.5,0.0,0.0],[190,65.5,74.9,0.0,0.0],[195,65.5,74.4,0.0,0.0],[200,65.6,74.0,0.0,0.0],[205,65.6,73.6,0.0,0.0],[210,65.6,73.2,0.0,0.0],[215,65.6,72.9,0.0,0.0],[220,65.6,72.6,0.0,0.0],[225,65.5,72.3,0.0,0.0],[230,65.5,72.1,0.0,0.0],[235,65.6,71.9,0.0,0.0],[240,65.5,71.7,0.0,0.0],[245,65.6,71.5,0.0,0.0],[250,65.6,71.4,0.0,0.0],[255,65.6,71.3,0.0,0.0],[260,65.7,71.2,0.0,0.0],[265,65.8,71.2,0.0,0.0],[270,65.8,71.2,0.0,0.0],[275,65.8,71.1,0.0,0.0],[280,65.8,71.1,0.0,0.0],[285,65.9,71.1,0.0,0.0],[290,65.9,71.2,0.0,0.0],[295,65.9,71.2,0.0,0.0],[300,65.9,71.2,0.0,0.0],[305,65.9,71.2,0.0,0.0],[310,65.9,71.3,0.0,0.0],[315,65.9,71.3,0.0,0.0],[320,65.9,71.3,0.0,0.0],[325,65.9,71.4,0.0,0.0],[330,65.9,71.4,0.0,0.0],[335,65.8,71.4,0.0,0.0],[340,65.8,71.5,0.0,0.0],[345,65.6,71.5,0.0,0.0],[350,65.6,71.5,0.0,0.0],[355,65.6,71.6,0.0,0.0],[360,65.7,71.6,0.0,0.0],[365,65.7,71.7,0.0,0.0],[370,65.7,71.7,0.0,0.0],[375,65.7,71.7,0.0,0.0],[380,65.7,71.8,0.0,0.0],[385,65.7,71.8,0.0,0.0],[390,65.7,71.8,0.0,0.0],[395,65.8,71.9,0.0,0.0],[400,65.8,71.9,0.0,0.0],[405,65.8,71.9,0.0,0.0],[410,65.8,72.0,0.0,0.0],[415,65.9,72.0,0.0,0.0],[420,65.8,72.0,0.0,0.0],[425,65.9,72.0,0.0,0.0],[430,65.9,72.0,0.0,0.0],[435,65.1,72.0,0.0,0.0],[440,59.3,72.1,0.0,0.0]],"mslc":null,"prochot":null},"r1115":{"pts":[[0,12.9,82.0,0.0,0.0],[5,13.0,82.0,0.0,0.0],[10,12.8,82.0,0.0,0.0],[15,12.5,82.0,0.0,0.0],[20,12.4,82.0,0.0,0.0],[25,12.2,82.0,0.0,0.0],[30,12.9,82.0,0.0,0.0],[35,13.0,82.0,0.0,0.0],[40,13.0,82.0,0.0,0.0],[45,13.0,82.0,0.0,0.0],[50,13.6,82.0,0.0,0.0],[55,14.3,82.0,0.0,0.0],[60,15.4,82.0,0.0,0.0],[65,16.1,82.0,0.0,0.0],[70,18.6,82.0,0.0,0.0],[75,23.3,82.0,0.0,0.0],[80,27.4,82.0,0.0,0.0],[85,32.5,82.0,0.0,0.0],[91,37.9,82.0,0.0,0.0],[96,42.2,82.0,0.0,0.0],[101,45.1,82.0,0.0,0.0],[106,47.6,82.0,0.0,0.0],[111,47.8,82.0,0.0,0.0],[116,47.0,82.0,0.0,0.0],[121,46.2,82.0,0.0,0.0],[126,47.7,82.0,0.0,0.0],[131,49.8,82.0,0.0,0.0],[136,52.0,82.0,0.0,0.0],[141,53.8,82.0,0.0,0.0],[146,55.5,82.0,0.0,0.0],[151,57.0,82.0,0.0,0.0],[156,58.2,82.0,0.0,0.0],[161,59.1,82.0,0.0,0.0],[166,60.0,82.0,0.0,0.0],[171,60.6,82.0,0.0,0.0],[177,61.5,82.0,0.0,0.0],[182,62.3,82.0,0.0,0.0],[187,62.9,82.0,0.0,0.0],[192,63.5,82.0,0.0,0.0],[197,63.9,82.0,0.0,0.0],[202,64.2,82.0,0.0,0.0],[207,64.6,81.1,0.0,0.0],[212,64.8,80.4,0.0,0.0],[217,65.0,79.5,0.0,0.0],[222,65.2,78.7,0.0,0.0],[227,65.4,77.9,0.0,0.0],[232,65.4,77.2,0.0,0.0],[237,65.5,76.6,0.0,0.0],[242,65.5,75.9,0.0,0.0],[247,65.6,75.2,0.0,0.0],[252,65.6,74.4,0.0,0.0],[257,65.6,73.8,0.0,0.0],[262,65.5,73.3,0.0,0.0],[267,65.4,72.8,0.0,0.0],[272,65.3,72.4,0.0,0.0],[277,65.2,72.0,0.0,0.0],[282,65.0,71.6,0.0,0.0],[287,64.8,71.3,0.0,0.0],[292,64.8,71.1,0.0,0.0],[297,64.9,70.8,0.0,0.0],[302,65.0,70.7,0.0,0.0],[307,65.0,70.5,0.0,0.0],[312,65.0,70.4,0.0,0.0],[317,65.1,70.3,0.0,0.0],[322,65.1,70.2,0.0,0.0],[327,65.1,70.2,0.0,0.0],[332,65.3,70.2,0.0,0.0],[337,65.3,70.2,0.0,0.0],[342,65.4,70.2,0.0,0.0],[347,65.4,70.2,0.0,0.0],[353,65.4,70.3,0.0,0.0],[358,65.4,70.3,0.0,0.0],[363,65.4,70.3,0.0,0.0],[368,65.4,70.4,0.0,0.0],[373,65.1,70.5,0.0,0.0],[378,64.8,70.5,0.0,0.0],[383,64.5,70.6,0.0,0.0],[388,64.3,70.7,0.0,0.0],[393,64.2,70.7,0.0,0.0],[398,64.2,70.8,0.0,0.0],[403,64.2,70.9,0.0,0.0],[408,64.1,71.0,0.0,0.0],[413,64.0,71.0,0.0,0.0],[418,64.0,71.1,0.0,0.0],[423,63.9,71.2,0.0,0.0],[428,63.9,71.3,0.0,0.0],[433,63.9,71.3,0.0,0.0],[438,63.8,71.4,0.0,0.0],[443,63.6,71.5,0.0,0.0],[448,63.7,71.6,0.0,0.0],[453,63.5,71.6,0.0,0.0],[458,63.7,71.7,0.0,0.0],[463,63.9,71.8,0.0,0.0],[468,64.1,71.9,0.0,0.0],[473,64.2,71.9,0.0,0.0],[478,64.3,72.0,0.0,0.0],[484,63.6,72.0,0.0,0.0]],"mslc":null,"prochot":null},"clock":[[31885,90,2124],[31891,162,2943],[31897,626,2648],[31903,87,1553],[31909,47,1229],[31915,463,3200],[31921,260,3198],[31927,886,2948],[31933,1177,2812],[31939,1231,2652],[31945,1307,2301],[31951,1149,2301],[31957,1575,2299],[31963,1300,2302],[31969,1270,2300],[31975,1186,2299],[31981,1033,2297],[31987,1076,2299],[31993,1268,2300],[31999,1364,2300],[32005,1530,2300],[32011,1670,2300],[32017,1569,2299],[32023,1406,2300],[32029,1499,2300],[32035,1400,2300],[32041,1585,2300],[32047,1530,2300],[32053,72,2299],[32059,31,2299],[32065,55,2300],[32071,50,2299],[32077,21,2302],[32083,18,2301],[32089,19,2299],[32095,13,2300],[32101,70,2300],[32107,84,2300],[32113,111,2301],[32119,78,2300],[32125,43,2301],[32131,35,2304],[32137,135,2301],[32143,86,2300],[32149,76,2301],[32155,65,2299],[32161,26,2301],[32167,82,2299],[32173,48,2302],[32179,46,2300],[32185,44,2299],[32191,54,2299],[32197,46,2298],[32203,50,2300],[32209,34,2300],[32215,85,2301],[32221,104,2299],[32227,31,2300],[32233,26,2299],[32238,62,796],[32243,13,2303],[32249,24,2300],[32255,77,2300],[32261,32,1254],[32267,162,2300],[32273,76,2299],[32279,46,1278],[32285,12,2301],[32291,56,2300],[32297,74,2300],[32302,64,800],[32307,11,2299],[32313,55,2299],[32319,56,1350],[32325,9,2299],[32331,29,2298],[32338,42,801],[32343,9,2299],[32349,45,2301],[32355,46,1312],[32361,12,1254],[32367,45,2301],[32373,53,2301],[32378,197,2299]],"mode":[[37558,20.1,49.1],[37560,20.4,48.1],[37562,20.4,48.2],[37564,20.2,49.1],[37566,19.8,49.0],[37568,20.9,46.5],[37570,21.3,45.8],[37572,21.6,46.9],[37574,21.4,45.2],[37576,21.8,45.8],[37578,20.9,46.7],[37580,21.3,45.7],[37582,21.3,46.8],[37584,20.9,47.8],[37586,20.8,47.9],[37588,20.3,50.4],[37590,19.5,50.8],[37592,21.1,45.0],[37594,22.1,43.8],[37596,21.8,45.3],[37598,21.4,46.6],[37600,24.9,48.3],[37602,20.6,48.1],[37604,21.2,46.4],[37606,21.3,44.8],[37608,22.1,44.2],[37610,22.1,44.5],[37612,22.1,44.6],[37614,22.1,44.8],[37616,22.2,44.3],[37618,22.3,44.4],[37620,22.6,43.1],[37622,22.5,43.4],[37624,21.9,45.1],[37626,22.2,44.2],[37628,21.9,44.9],[37630,22.0,45.0],[37632,22.0,44.2],[37634,22.4,44.0],[37636,22.2,44.1],[37638,22.5,44.1],[37640,21.8,45.6],[37642,21.1,47.4],[37644,19.7,52.8],[37646,19.0,50.4],[37648,19.4,51.9],[37650,18.5,52.4],[37652,18.8,52.2],[37654,19.4,49.8],[37656,20.0,49.2],[37658,20.0,49.4],[37660,20.0,49.4],[37662,19.9,49.3],[37664,23.4,49.3],[37666,20.3,48.3],[37668,21.8,44.7],[37670,22.5,43.6],[37672,22.6,43.5],[37674,22.6,43.3],[37676,22.7,43.5],[37678,22.7,43.5],[37680,22.7,43.3],[37682,22.6,43.3],[37684,22.6,43.1],[37686,23.1,42.7],[37688,23.1,42.5],[37690,23.1,42.7],[37692,22.9,44.3],[37694,22.1,43.4],[37696,23.0,43.4],[37698,23.0,42.9],[37700,23.2,42.5],[37702,23.8,41.2],[37704,22.6,44.3],[37706,21.9,44.8],[37708,22.1,44.2],[37710,22.0,44.9],[37712,22.8,42.8],[37714,22.6,44.6],[37716,22.3,43.8],[37718,22.5,43.9],[37720,22.9,42.0],[37722,23.1,43.5],[37724,22.0,45.2],[37726,21.8,44.6],[37728,22.0,45.0],[37730,21.8,45.0],[37732,21.8,45.3],[37734,30.0,45.0],[37736,42.6,16.1],[37738,56.9,15.2],[37740,58.6,15.9],[37742,58.9,14.5],[37744,60.0,15.0],[37746,60.0,12.8],[37748,60.0,13.0],[37750,60.2,13.1],[37752,60.1,13.2],[37754,60.0,13.2],[37756,59.5,13.0],[37758,59.9,13.0],[37760,59.1,16.3],[37762,58.9,13.8],[37764,59.7,15.2],[37766,56.2,17.0],[37768,56.0,16.9],[37770,57.2,16.2],[37772,59.5,14.4],[37774,60.4,13.8],[37776,59.7,15.1],[37778,59.0,16.1],[37780,56.6,17.1],[37782,55.1,18.2],[37784,54.2,17.6],[37786,55.3,17.5],[37788,56.5,16.5],[37790,57.5,16.5],[37792,56.6,16.5],[37794,54.5,17.9],[37796,54.2,17.7],[37798,56.0,17.0],[37800,53.9,17.4],[37802,55.0,17.6],[37804,54.7,17.5],[37806,52.4,18.5],[37808,51.5,18.4],[37810,51.4,18.8],[37812,51.9,18.3],[37814,52.5,18.3],[37816,52.1,18.2],[37818,53.9,17.8],[37820,54.8,17.4],[37822,52.8,16.9],[37824,54.1,15.5],[37826,54.4,15.4],[37828,55.6,15.6],[37830,57.0,15.6],[37832,57.3,16.9],[37834,56.9,15.2],[37836,58.0,14.7],[37838,59.6,14.7],[37840,59.2,13.7],[37842,58.9,12.7],[37844,57.8,14.8],[37846,55.8,17.1],[37848,59.4,14.9],[37850,59.9,13.2],[37852,60.1,14.7],[37854,59.9,15.8],[37856,60.0,13.9],[37858,60.3,14.3],[37860,58.9,16.7],[37862,57.0,16.6],[37864,60.1,11.6],[37866,60.1,9.9],[37868,60.0,12.7],[37870,57.5,16.0],[37872,60.1,12.4],[37874,60.0,11.2],[37876,60.1,11.3],[37878,59.3,14.8],[37880,59.0,16.0],[37882,58.2,16.1],[37884,58.7,15.7],[37886,57.1,16.4],[37888,57.2,16.2],[37890,55.6,15.9],[37892,56.2,16.1],[37894,57.7,16.1],[37896,59.0,16.6],[37898,53.0,17.5],[37900,54.4,17.0],[37902,52.9,18.3],[37904,54.8,17.7],[37906,53.7,18.0],[37908,53.4,17.6],[37910,56.0,17.1],[37912,55.0,17.3],[37914,53.7,17.6],[37916,55.8,17.8]]};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function ticks(lo, hi, n) { const step = niceStep((hi - lo) / n); const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6)); return out; }
+function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw))); const f = raw / p; return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * p; }
+
+// generic line chart: series [{name,color,data:[[x,y]],width?}], markers [{x,color,label}]
+function lineChart(host, o) {
+  host.innerHTML = '';
+  const W = Math.max(280, host.clientWidth), H = o.height || 200;
+  const m = { l: 40, r: 12, t: 10, b: o.xTitle ? 34 : 22 };
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': o.label }, host);
+  const [x0, x1] = o.x, [y0, y1] = o.y;
+  const X = v => m.l + (v - x0) / (x1 - x0) * (W - m.l - m.r);
+  const Y = v => H - m.b - (v - y0) / (y1 - y0) * (H - m.t - m.b);
+  const g = el('g', { class: 'grid' }, svg);
+  for (const t of ticks(y0, y1, o.yTicks || 4)) { el('line', { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t) }, g); el('text', { x: m.l - 6, y: Y(t) + 3, 'text-anchor': 'end' }, svg).textContent = t; }
+  el('line', { class: 'base', x1: m.l, x2: W - m.r, y1: Y(y0), y2: Y(y0) }, svg);
+  for (const t of ticks(x0, x1, Math.max(3, Math.floor(W / 90)))) el('text', { x: X(t), y: H - m.b + 14, 'text-anchor': 'middle' }, svg).textContent = o.xFmt ? o.xFmt(t) : t;
+  if (o.xTitle) el('text', { class: 'axis-title', x: W - m.r, y: H - 4, 'text-anchor': 'end' }, svg).textContent = o.xTitle;
+  for (const mk of o.markers || []) {
+    if (mk.x == null) continue;
+    el('line', { x1: X(mk.x), x2: X(mk.x), y1: m.t, y2: Y(y0), stroke: mk.color, 'stroke-width': 1.5, 'stroke-dasharray': '3 3' }, svg);
+    el('circle', { cx: X(mk.x), cy: m.t + 4, r: 4, fill: mk.color, stroke: css('--panel'), 'stroke-width': 2 }, svg);
+    if (mk.label) { const right = X(mk.x) > W * 0.7; el('text', { x: X(mk.x) + (right ? -7 : 7), y: m.t + 8, 'text-anchor': right ? 'end' : 'start', class: 'axis-title' }, svg).textContent = mk.label; }
+  }
+  for (const s of o.series) {
+    const pts = s.data.filter(p => p[1] != null);
+    if (!pts.length) continue;
+    el('path', { d: pts.map((p, i) => (i ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(Math.min(y1, Math.max(y0, p[1]))).toFixed(1)).join(''), fill: 'none', stroke: s.color, 'stroke-width': s.width || 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+  }
+  // hover
+  const cross = el('line', { y1: m.t, y2: Y(y0), stroke: css('--ink-3'), 'stroke-width': 1, opacity: 0 }, svg);
+  const tip = document.createElement('div'); tip.className = 'tip'; tip.hidden = true; host.appendChild(tip);
+  const hit = el('rect', { x: m.l, y: 0, width: W - m.l - m.r, height: H, fill: 'transparent' }, svg);
+  const xs = o.series[0].data.map(p => p[0]);
+  function show(ev) {
+    const r = svg.getBoundingClientRect(); const px = (ev.clientX - r.left) * W / r.width;
+    const xv = x0 + (px - m.l) / (W - m.l - m.r) * (x1 - x0);
+    let i = 0, best = Infinity; xs.forEach((x, j) => { const d = Math.abs(x - xv); if (d < best) { best = d; i = j; } });
+    const xx = xs[i]; cross.setAttribute('x1', X(xx)); cross.setAttribute('x2', X(xx)); cross.setAttribute('opacity', 1);
+    tip.innerHTML = `<b>${o.xFmt ? o.xFmt(xx) : xx}${o.xUnit || ''}</b><br>` + o.series.map(s => { const p = s.data.find(q => q[0] === xx); return p && p[1] != null ? `${s.name} ${p[1]}${s.unit || ''}` : ''; }).filter(Boolean).join('<br>');
+    tip.hidden = false; const left = X(xx) / W * r.width; tip.style.left = (left > r.width * 0.6 ? left - tip.offsetWidth - 10 : left + 10) + 'px'; tip.style.top = '4px';
+  }
+  hit.addEventListener('pointermove', show); hit.addEventListener('pointerdown', show);
+  hit.addEventListener('pointerleave', () => { tip.hidden = true; cross.setAttribute('opacity', 0); });
+}
+
+const RUNS = [
+  { k: 'r0141', name: '01:41', cfg: 'GPU 40 W · CPU ~25 W · bypass', ok: false },
+  { k: 'r0851', name: '08:51', cfg: 'GPU 35 W · PL1 20 W · bypass', ok: false },
+  { k: 'r0951', name: '09:51', cfg: 'GPU 32 W · PL1 20 W clamped · bypass', ok: true },
+  { k: 'r1115', name: '11:15', cfg: 'GPU 32 W · 1700 MHz · stock driver', ok: true },
+];
+const hms = s => { s = Math.round(s); const h = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60); return h + ':' + String(mm).padStart(2, '0'); };
+const hmss = s => { s = Math.round(s); const h = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60), ss = s % 60; return h + ':' + String(mm).padStart(2, '0') + ':' + String(ss).padStart(2, '0'); };
+
+function render() {
+  const mult = document.getElementById('multiples'); mult.innerHTML = '';
+  for (const r of RUNS) {
+    const d = D[r.k]; const p = document.createElement('div'); p.className = 'panel';
+    p.innerHTML = `<div class="t"><b>${r.name}</b><span class="verdict ${r.ok ? 'ok' : 'bad'}">${r.ok ? 'NO CUT' : 'CUT'}</span></div><i style="font-style:normal;font-size:.8rem;color:var(--ink-3)">${r.cfg}</i><div class="chart w"></div><div class="chart t2"></div>`;
+    mult.appendChild(p);
+    const marks = [{ x: d.mslc, color: css('--warn'), label: d.mslc != null ? 'MSLC' : '' }, { x: d.prochot, color: css('--crit'), label: d.prochot != null ? 'PROCHOT' : '' }];
+    lineChart(p.querySelector('.w'), { label: `Run ${r.name}: draw and budget in watts over time`, x: [0, 500], y: [0, 90], yTicks: 3, height: 170,
+      series: [{ name: 'PZ0F', unit: ' W', color: css('--draw'), data: d.pts.map(q => [q[0], q[1]]) }, { name: 'PZ0E', unit: ' W', color: css('--budget'), data: d.pts.map(q => [q[0], q[2]]) }],
+      markers: marks, xUnit: ' s' });
+    lineChart(p.querySelector('.t2'), { label: `Run ${r.name}: PZ0T overshoot`, x: [0, 500], y: [0, 100], yTicks: 1, height: 62, xTitle: 'seconds',
+      series: [{ name: 'PZ0T', color: css('--pz0t'), width: 1.5, data: d.pts.map(q => [q[0], q[3]]) }], markers: marks.map(m => ({ ...m, label: '' })), xUnit: ' s' });
+  }
+  const c = D.clock;
+  lineChart(document.getElementById('clock'), { label: 'HWiNFO effective clock versus Windows real clock, 08:51 run', x: [c[0][0], c[c.length - 1][0]], y: [0, 3500], height: 220, xFmt: hms, xTitle: 'time of day',
+    series: [{ name: 'HWiNFO', unit: ' MHz', color: css('--ink-3'), data: c.map(q => [q[0], q[1]]) }, { name: 'typeperf', unit: ' MHz', color: css('--draw'), data: c.map(q => [q[0], q[2]]) }] });
+  const f = D.mode, sw = 10 * 3600 + 28 * 60 + 58;
+  const mk = [{ x: sw, color: css('--mark'), label: 'Borderless' }];
+  lineChart(document.getElementById('fps'), { label: 'Frames per second around the switch to Borderless', x: [f[0][0], f[f.length - 1][0]], y: [0, 70], height: 150, xFmt: hms, yTicks: 3,
+    series: [{ name: 'FPS', color: css('--draw'), data: f.map(q => [q[0], q[1]]) }], markers: mk });
+  lineChart(document.getElementById('gpums'), { label: 'GPU busy milliseconds per frame around the switch to Borderless', x: [f[0][0], f[f.length - 1][0]], y: [0, 60], height: 150, xFmt: hms, yTicks: 3, xTitle: 'time of day',
+    series: [{ name: 'GPU busy', unit: ' ms', color: css('--budget'), data: f.map(q => [q[0], q[2]]) }], markers: mk.map(m => ({ ...m, label: '' })) });
+}
+render();
+let rt; new ResizeObserver(() => { clearTimeout(rt); rt = setTimeout(render, 120); }).observe(document.querySelector('main'));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+</script>
+
+</body>
+</html>
