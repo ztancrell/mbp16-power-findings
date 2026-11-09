@@ -146,7 +146,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; color: var(--ink-
     <h2>One budget, four stages of enforcement</h2>
     <p class="col">The SMC's zone-0 controller compares two values every second. When the draw stays above the budget, it steps in, harder each stage. Windows, ACPI and the AMD driver only pass its decisions on.</p>
     <ol class="ladder">
-      <li><span class="sev s1"></span><span class="n">1</span><div><span class="k">PZ0F</span> is the smoothed CPU + GPU draw in watts. <span class="k">PZ0E</span> is the budget. It starts at ~82 W and falls as the case sensor <span class="k">Ts0S</span> warms past ~43.5 °C.</div></li>
+      <li><span class="sev s1"></span><span class="n">1</span><div><span class="k">PZ0F</span> is the smoothed CPU + GPU draw in watts. <span class="k">PZ0E</span> is the budget. It starts at ~82 W and falls as the case sensors warm past their targets, mostly <span class="k">Ts2S</span> past 45 °C.</div></li>
       <li><span class="sev s2"></span><span class="n">2</span><div>While <span class="k">PZ0F</span> is above <span class="k">PZ0E</span>, <span class="k">PZ0T</span> climbs. It adds up the overshoot, roughly 0.5–1.3 per second.</div></li>
       <li><span class="sev s2"></span><span class="n">3</span><div><b>GPU steps.</b> <span class="k">MSLG</span> rises and reaches the GPU as <span class="k">EGPS</span>: the power limit drops 50 → 45 → 40 → 35 → 30 W, each step 10 % of the power table's limit.</div></li>
       <li><span class="sev s3"></span><span class="n">4</span><div><b>Hidden CPU cut.</b> <span class="k">MSLC</span> (0–24) slows the real CPU clock from 2300 to about 800 MHz. HWiNFO and ThrottleStop still show 23x, so it looks like nothing happened.</div></li>
@@ -238,7 +238,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; color: var(--ink-
     <ul class="dead">
       <li><b>ACPI.</b> <span class="why">It relays the SMC's bytes to Windows; no method writes them.</span></li>
       <li><b>AMD PowerPlay and VBIOS.</b> <span class="why">The cut is a forced power state applied on top of the table.</span></li>
-      <li><b>Writing SMC keys.</b> <span class="why">A new <span class="k">PZ0E</span> is overwritten within a second; no key holds the ceilings.</span></li>
+      <li><b>Writing SMC keys.</b> <span class="why">A new <span class="k">PZ0E</span> is overwritten within a second; no key holds the ceilings. One key pair can freeze the budget; a guarded test is written but has not run yet.</span></li>
       <li><b>EFI settings.</b> <span class="why">Its CPU power limit is the same register ThrottleStop writes.</span></li>
       <li><b>The charger.</b> <span class="why">Already Apple's 96 W, the most this model takes.</span></li>
       <li><b>Chip temperature.</b> <span class="why">PROCHOT fired with the GPU hot spot under 95 °C.</span></li>
@@ -258,6 +258,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; color: var(--ink-
   <footer>
     <span>Measured on one 2019 16-inch MacBook Pro, 7–8 November 2026, with smclog (a read-only SMC logger), HWiNFO and Windows typeperf.</span>
     <span>Raw logs are not published. Key names such as <span class="k">PZ0F</span> are the SMC's own.</span>
+    <span>The research, tools and write-ups were done by ztancrell working with Claude Opus 5.5 (Anthropic's model) in Claude Code. Page source: <a href="https://github.com/ztancrell/mbp16-power-findings">github.com/ztancrell/mbp16-power-findings</a>; the research notes and tools are in a private repository for now.</span>
   </footer>
 </main>
 
